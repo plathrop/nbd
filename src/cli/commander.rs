@@ -116,8 +116,8 @@ pub struct AddNoteCommand {
     /// ID of the contact to add the note to
     pub contact_id: i64,
 
-    /// Text of the note
-    pub note: String,
+    /// Text of the note; if omitted, opens $VISUAL/$EDITOR to compose it
+    pub note: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -125,8 +125,9 @@ pub struct EditNoteCommand {
     /// ID of the note to edit
     pub id: i64,
 
-    /// New text of the note
-    pub note: String,
+    /// New text of the note; if omitted, opens $VISUAL/$EDITOR with the
+    /// current text
+    pub note: Option<String>,
 }
 
 #[derive(Args, Debug)]

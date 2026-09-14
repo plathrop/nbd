@@ -9,6 +9,7 @@ use super::connection::Repo;
 pub trait NoteRepo {
     async fn save_note(&self, note: models::Note) -> anyhow::Result<i64>;
     async fn update_note(&self, note_id: i64, body: &str) -> anyhow::Result<()>;
+    async fn get_note_by_id(&self, note_id: i64) -> anyhow::Result<models::Note>;
     async fn get_notes_for_contact(&self, contact_id: i64) -> anyhow::Result<Vec<models::Note>>;
     async fn get_all_notes(&self) -> anyhow::Result<Vec<models::Note>>;
     async fn delete_note_by_id(&self, note_id: i64) -> anyhow::Result<i64>;
@@ -64,6 +65,22 @@ impl NoteRepo for Repo<SqlitePool> {
         }
 
         Ok(())
+    }
+
+    async fn get_note_by_id(&self, note_id: i64) -> anyhow::Result<models::Note> {
+        let query_get_by_id = "SELECT * FROM notes WHERE id = ?";
+
+        match sqlx::query_as::<_, models::Note>(query_get_by_id)
+            .bind(note_id)
+            .fetch_one(&*self.database)
+            .await
+        {
+            Ok(note) => Ok(note),
+            Err(sqlx::Error::RowNotFound) => {
+                anyhow::bail!("That Note ID does not exist")
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     async fn get_notes_for_contact(&self, contact_id: i64) -> anyhow::Result<Vec<models::Note>> {
@@ -263,6 +280,37 @@ mod tests {
             notes.first().expect("Note should exist").body,
             "Original body"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_get_note_by_id() -> anyhow::Result<()> {
+        let pool = setup_in_memory_db().await;
+        let data_repo = Repo::new(pool);
+
+        let contact_id = create_contact(&data_repo).await;
+
+        let note = models::Note::new(contact_id, "A memorable note").expect("Valid note");
+        let note_id = data_repo.save_note(note).await?;
+
+        let fetched = data_repo.get_note_by_id(note_id).await?;
+
+        assert_eq!(fetched.id, note_id);
+        assert_eq!(fetched.body, "A memorable note");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_return_error_when_getting_nonexistent_note_by_id() -> anyhow::Result<()> {
+        let pool = setup_in_memory_db().await;
+        let data_repo = Repo::new(pool);
+
+        let result = data_repo.get_note_by_id(999).await;
+
+        let err = result.expect_err("Expected get to fail");
+        assert!(err.to_string().contains("That Note ID does not exist"));
 
         Ok(())
     }

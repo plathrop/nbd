@@ -1,6 +1,7 @@
 use nbd::{
     db::{self, ContactRepo, NoteRepo, Repo},
     models::{self, ContactBuilder, NoteSummary},
+    utils,
 };
 use sqlx::SqlitePool;
 use tabled::Table;
@@ -46,7 +47,14 @@ impl Actions {
     }
 
     pub async fn add_note(&self, command: &AddNoteCommand) -> Result<(), anyhow::Error> {
-        let note = models::Note::new(command.contact_id, &command.note)?;
+        let body = if let Some(body) = &command.note {
+            body.clone()
+        } else {
+            eprintln!("Opening your editor to compose the note...");
+            utils::edit_text(".txt", "")?
+        };
+
+        let note = models::Note::new(command.contact_id, &body)?;
 
         let note_id = self.data_repo.save_note(note).await?;
 
@@ -56,9 +64,18 @@ impl Actions {
     }
 
     pub async fn edit_note(&self, command: &EditNoteCommand) -> Result<(), anyhow::Error> {
-        self.data_repo
-            .update_note(command.id, &command.note)
-            .await?;
+        let body = if let Some(body) = &command.note {
+            body.clone()
+        } else {
+            // Fetch the existing note first so a bad ID fails before
+            // the editor opens
+            let existing = self.data_repo.get_note_by_id(command.id).await?;
+
+            eprintln!("Opening your editor to edit the note...");
+            utils::edit_text(".txt", &existing.body)?
+        };
+
+        self.data_repo.update_note(command.id, &body).await?;
 
         println!("Note updated");
 
