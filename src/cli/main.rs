@@ -38,10 +38,13 @@ async fn main() -> anyhow::Result<()> {
         Commands::Init => {} // handled above (branch early)
         Commands::Create(value) => actions.create_contact(value).await?,
         Commands::Edit(value) => actions.edit_contact(value).await?,
-        Commands::Show => actions.show_all_contacts().await?,
+        Commands::Show(value) => actions.show_all_contacts(value).await?,
         Commands::Get(value) => actions.get_contact(value).await?,
         Commands::Delete(value) => actions.delete_contact(value).await?,
         Commands::Import(value) => actions.import_contacts(value).await?,
+        Commands::AddNote(value) => actions.add_note(value).await?,
+        Commands::EditNote(value) => actions.edit_note(value).await?,
+        Commands::DeleteNote(value) => actions.delete_note(value).await?,
     }
 
     Ok(())

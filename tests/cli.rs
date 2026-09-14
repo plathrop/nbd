@@ -3,9 +3,10 @@ mod tests {
     use anyhow::Result;
     use assert_cmd::{cargo, Command};
     use nbd::{
-        db::{ContactRepo, Repo},
+        db::{ContactRepo, NoteRepo, Repo},
         models::Contact,
     };
+    use predicates::prelude::PredicateBooleanExt;
     use sqlx::SqlitePool;
 
     fn create_command() -> Command {
@@ -58,7 +59,13 @@ mod tests {
 
         sqlx::query!("DELETE FROM contacts").execute(&pool).await?;
 
+        sqlx::query("DELETE FROM notes").execute(&pool).await?;
+
         sqlx::query!("DELETE FROM SQLITE_SEQUENCE WHERE name = 'contacts'")
+            .execute(&pool)
+            .await?;
+
+        sqlx::query("DELETE FROM SQLITE_SEQUENCE WHERE name = 'notes'")
             .execute(&pool)
             .await?;
 
@@ -84,14 +91,17 @@ mod tests {
             "Usage: nbd-cli <COMMAND>",
             "",
             "Commands:",
-            "  init    Initialize a new contact book",
-            "  create  Create a contact",
-            "  edit    Edit a contact by ID",
-            "  show    Get all contacts",
-            "  get     Get a contact",
-            "  delete  Delete a contact",
-            "  import  Import contact via CSV",
-            "  help    Print this message or the help of the given subcommand(s)",
+            "  init         Initialize a new contact book",
+            "  create       Create a contact",
+            "  edit         Edit a contact by ID",
+            "  show         Get all contacts",
+            "  get          Get a contact",
+            "  delete       Delete a contact",
+            "  import       Import contact via CSV",
+            "  add-note     Add a note to a contact",
+            "  edit-note    Edit a note by ID",
+            "  delete-note  Delete a note by ID",
+            "  help         Print this message or the help of the given subcommand(s)",
             "",
             "Options:",
             "  -h, --help     Print help",
@@ -407,6 +417,319 @@ mod tests {
         cmd.assert().success();
         let db_path = config_dir.join("contacts.db");
         assert!(db_path.exists(), "expected database file at {db_path:?}");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_create_contact_with_notes() -> Result<()> {
+        clean_database().await?;
+
+        let mut cmd = create_command();
+        cmd.arg("create")
+            .arg("--first-name")
+            .arg("Alice")
+            .arg("--last-name")
+            .arg("Lovelace")
+            .arg("--note")
+            .arg("Met at PyCon")
+            .arg("--note")
+            .arg("Follow up about Rust");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Successfully saved contact"))
+            .stdout(predicates::str::contains("Successfully saved 2 note(s)"));
+
+        let data_repo = create_repo().await?;
+
+        let notes = data_repo.get_notes_for_contact(1).await?;
+
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].body, "Met at PyCon");
+        assert_eq!(notes[1].body, "Follow up about Rust");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_reject_note_over_maximum_length_on_create() -> Result<()> {
+        clean_database().await?;
+
+        let long_note = "x".repeat(nbd::models::MAX_NOTE_LENGTH + 1);
+
+        let mut cmd = create_command();
+        cmd.arg("create")
+            .arg("--first-name")
+            .arg("Alice")
+            .arg("--note")
+            .arg(&long_note);
+
+        cmd.assert()
+            .failure()
+            .stderr(predicates::str::contains("maximum length"));
+
+        // The contact must not have been created with a bad note
+        let data_repo = create_repo().await?;
+        let contacts = data_repo.get_all_contacts().await?;
+        assert!(contacts.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_reject_empty_note_on_create() -> Result<()> {
+        clean_database().await?;
+
+        let mut cmd = create_command();
+        cmd.arg("create")
+            .arg("--first-name")
+            .arg("Alice")
+            .arg("--note")
+            .arg("   ");
+
+        cmd.assert()
+            .failure()
+            .stderr(predicates::str::contains("Note cannot be empty"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_add_note_to_existing_contact() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.arg("add-note").arg("1").arg("Loves wordplay");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Successfully saved note 1"));
+
+        let notes = data_repo.get_notes_for_contact(1).await?;
+
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].body, "Loves wordplay");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_fail_when_adding_note_to_nonexistent_contact() -> Result<()> {
+        clean_database().await?;
+
+        let mut cmd = create_command();
+        cmd.arg("add-note").arg("999").arg("Hello?");
+
+        cmd.assert()
+            .failure()
+            .stderr(predicates::str::contains("That Contact ID does not exist"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_edit_note() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.arg("add-note").arg("1").arg("Original body");
+        cmd.assert().success();
+
+        let mut cmd = create_command();
+        cmd.arg("edit-note").arg("1").arg("Edited body");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Note updated"));
+
+        let notes = data_repo.get_notes_for_contact(1).await?;
+        assert_eq!(notes[0].body, "Edited body");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_fail_when_editing_nonexistent_note() -> Result<()> {
+        clean_database().await?;
+
+        let mut cmd = create_command();
+        cmd.arg("edit-note").arg("999").arg("New body");
+
+        cmd.assert()
+            .failure()
+            .stderr(predicates::str::contains("That Note ID does not exist"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_delete_note() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.arg("add-note").arg("1").arg("Temporary note");
+        cmd.assert().success();
+
+        let mut cmd = create_command();
+        cmd.arg("delete-note").arg("1");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Successfully deleted note 1"));
+
+        let notes = data_repo.get_notes_for_contact(1).await?;
+        assert!(notes.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_fail_when_deleting_nonexistent_note() -> Result<()> {
+        clean_database().await?;
+
+        let mut cmd = create_command();
+        cmd.arg("delete-note").arg("999");
+
+        cmd.assert()
+            .failure()
+            .stderr(predicates::str::contains("That Note ID does not exist"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_show_notes_when_getting_a_contact() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.arg("add-note")
+            .arg("1")
+            .arg("Wrote Alice in Wonderland");
+        cmd.assert().success();
+
+        let mut cmd = create_command();
+        cmd.arg("get").arg("1");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Notes:"))
+            .stdout(predicates::str::contains("Wrote Alice in Wonderland"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_say_no_notes_when_getting_contact_without_notes() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.arg("get").arg("1");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("No notes for this contact"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_show_notes_with_show_notes_flag() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.arg("add-note")
+            .arg("1")
+            .arg("First line of note\nsecond line stays hidden in summaries");
+        cmd.assert().success();
+
+        let mut cmd = create_command();
+        cmd.arg("show").arg("--show-notes");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Notes:"))
+            .stdout(predicates::str::contains("First line of note"))
+            .stdout(predicates::str::contains("| note"));
+        // only the first line is rendered in the summary table
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_not_show_notes_by_default_in_show() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.arg("add-note").arg("1").arg("Secret note body");
+        cmd.assert().success();
+
+        let mut cmd = create_command();
+        cmd.arg("show");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Secret note body").not());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_delete_notes_when_contact_is_deleted() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        let contact_id = data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.arg("add-note")
+            .arg(contact_id.to_string())
+            .arg("Note that should not outlive the contact");
+        cmd.assert().success();
+
+        let mut cmd = create_command();
+        cmd.arg("delete").arg(contact_id.to_string());
+        cmd.assert().success();
+
+        let notes = data_repo.get_all_notes().await?;
+        assert!(notes.is_empty());
 
         Ok(())
     }
