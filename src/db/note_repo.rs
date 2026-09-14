@@ -247,9 +247,22 @@ mod tests {
         let pool = setup_in_memory_db().await;
         let data_repo = Repo::new(pool);
 
-        let result = data_repo.update_note(1, "   ").await;
+        let contact_id = create_contact(&data_repo).await;
 
-        assert!(result.is_err());
+        let note = models::Note::new(contact_id, "Original body").expect("Valid note");
+        let note_id = data_repo.save_note(note).await?;
+
+        let result = data_repo.update_note(note_id, "   ").await;
+
+        let err = result.expect_err("Expected update to be rejected");
+        assert!(err.to_string().contains("empty"));
+
+        // The original body must be untouched
+        let notes = data_repo.get_notes_for_contact(contact_id).await?;
+        assert_eq!(
+            notes.first().expect("Note should exist").body,
+            "Original body"
+        );
 
         Ok(())
     }

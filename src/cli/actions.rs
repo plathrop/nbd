@@ -20,12 +20,6 @@ impl Actions {
     }
 
     pub async fn create_contact(&self, command: &CreateCommand) -> Result<(), anyhow::Error> {
-        // Validate notes before saving anything so a bad note
-        // cannot leave us with a half-created contact.
-        for note in &command.note {
-            models::Note::validate_body(note)?;
-        }
-
         let contact = models::Contact::builder()
             .first_name(command.first_name.as_deref().unwrap_or(""))
             .last_name(command.last_name.as_deref().unwrap_or(""))
@@ -34,12 +28,12 @@ impl Actions {
             .birthday(command.birthday.as_deref().unwrap_or(""))
             .build()?;
 
-        let id = self.data_repo.save_contact(contact).await?;
-
-        for body in &command.note {
-            let note = models::Note::new(id, body)?;
-            self.data_repo.save_note(note).await?;
-        }
+        // The contact and its notes are saved in a single transaction;
+        // a bad note body or a mid-save failure writes nothing at all.
+        let id = self
+            .data_repo
+            .save_contact_with_notes(contact, command.note.clone())
+            .await?;
 
         println!("Successfully saved contact {id}");
 
@@ -134,7 +128,7 @@ impl Actions {
         let notes = self.data_repo.get_notes_for_contact(id).await?;
 
         if notes.is_empty() {
-            println!("No notes for this contact");
+            println!("No notes yet!");
         } else {
             println!("Notes:");
             for note in notes {

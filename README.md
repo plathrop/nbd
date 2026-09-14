@@ -51,6 +51,7 @@ Create a contact
 Usage: nbd-cli <COMMAND>
 
 Commands:
+  init         Initialize a new contact book
   create       Create a contact
   edit         Edit a contact by ID
   show         Get all contacts

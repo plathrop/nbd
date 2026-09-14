@@ -653,7 +653,7 @@ mod tests {
 
         cmd.assert()
             .success()
-            .stdout(predicates::str::contains("No notes for this contact"));
+            .stdout(predicates::str::contains("No notes yet!"));
 
         Ok(())
     }
@@ -680,8 +680,9 @@ mod tests {
             .success()
             .stdout(predicates::str::contains("Notes:"))
             .stdout(predicates::str::contains("First line of note"))
-            .stdout(predicates::str::contains("| note"));
-        // only the first line is rendered in the summary table
+            .stdout(predicates::str::contains("| note"))
+            // only the first line is rendered in the summary table
+            .stdout(predicates::str::contains("second line stays hidden").not());
 
         Ok(())
     }

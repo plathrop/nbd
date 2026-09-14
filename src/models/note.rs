@@ -55,8 +55,8 @@ impl Note {
 
     /// Builds a new, unsaved note for the given contact.
     ///
-    /// The `id` and timestamps are placeholders; the repository assigns real
-    /// values when the note is saved.
+    /// The `id` is a placeholder; the repository assigns the real ID on
+    /// save. The timestamps are set here and persisted as-is.
     ///
     /// # Errors
     ///
