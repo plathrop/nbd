@@ -19,7 +19,7 @@ pub enum Commands {
     Edit(EditCommand),
 
     /// Get all contacts
-    Show,
+    Show(ShowCommand),
 
     /// Get a contact
     Get(GetCommand),
@@ -29,6 +29,15 @@ pub enum Commands {
 
     /// Import contact via CSV
     Import(ImportCommand),
+
+    /// Add a note to a contact
+    AddNote(AddNoteCommand),
+
+    /// Edit a note by ID
+    EditNote(EditNoteCommand),
+
+    /// Delete a note by ID
+    DeleteNote(DeleteNoteCommand),
 }
 
 #[derive(Args)]
@@ -50,6 +59,17 @@ pub struct CreateCommand {
 
     #[arg(short, long, value_name = "Birthday")]
     pub birthday: Option<String>,
+
+    /// Note(s) to attach to the new contact; may be given multiple times
+    #[arg(short, long, value_name = "Note")]
+    pub note: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ShowCommand {
+    /// Also display contact notes
+    #[arg(short, long)]
+    pub show_notes: bool,
 }
 
 #[derive(Args, Debug)]
@@ -89,4 +109,28 @@ pub struct DeleteCommand {
 pub struct ImportCommand {
     /// name of CSV file
     pub filename: String,
+}
+
+#[derive(Args, Debug)]
+pub struct AddNoteCommand {
+    /// ID of the contact to add the note to
+    pub contact_id: i64,
+
+    /// Text of the note
+    pub note: String,
+}
+
+#[derive(Args, Debug)]
+pub struct EditNoteCommand {
+    /// ID of the note to edit
+    pub id: i64,
+
+    /// New text of the note
+    pub note: String,
+}
+
+#[derive(Args, Debug)]
+pub struct DeleteNoteCommand {
+    /// ID of the note to delete
+    pub id: i64,
 }

@@ -7,10 +7,22 @@ use sqlx::SqlitePool;
 
 use super::connection::Repo;
 
+const INSERT_CONTACT_SQL: &str = "INSERT INTO contacts
+        (first_name, last_name, display_name, email, phone_number, birthday, starred, is_archived, created_at, updated_at, last_seen_at, frequency, last_reminder_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+const INSERT_NOTE_SQL: &str =
+    "INSERT INTO notes (contact_id, body, created_at, updated_at) VALUES (?, ?, ?, ?)";
+
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait ContactRepo {
     async fn save_contact(&self, contact: models::Contact) -> anyhow::Result<i64>;
+    async fn save_contact_with_notes(
+        &self,
+        contact: models::Contact,
+        note_bodies: Vec<String>,
+    ) -> anyhow::Result<i64>;
     async fn save_optional_contact(&self, contact: models::OptionalContact) -> anyhow::Result<i64>;
     async fn import_contacts_by_csv(&self, filename: &str) -> anyhow::Result<i64>;
     async fn get_all_contacts(&self) -> anyhow::Result<Vec<models::IndexedContact>>;
@@ -22,10 +34,7 @@ pub trait ContactRepo {
 #[async_trait]
 impl ContactRepo for Repo<SqlitePool> {
     async fn save_contact(&self, contact: models::Contact) -> anyhow::Result<i64> {
-        let query = "INSERT INTO contacts
-        (first_name, last_name, display_name, email, phone_number, birthday, starred, is_archived, created_at, updated_at, last_seen_at, frequency, last_reminder_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        let result = sqlx::query(query)
+        let result = sqlx::query(INSERT_CONTACT_SQL)
             .bind(&contact.first_name)
             .bind(&contact.last_name)
             .bind(&contact.display_name)
@@ -43,6 +52,59 @@ impl ContactRepo for Repo<SqlitePool> {
             .await?;
 
         let contact_id = result.last_insert_rowid();
+
+        Ok(contact_id)
+    }
+
+    /// Saves a contact and its notes atomically: either the contact and
+    /// every note are written, or nothing is.
+    ///
+    /// All note bodies are validated before the transaction begins, so a
+    /// validation failure never touches the database; a failure while
+    /// writing rolls the whole transaction back.
+    async fn save_contact_with_notes(
+        &self,
+        contact: models::Contact,
+        note_bodies: Vec<String>,
+    ) -> anyhow::Result<i64> {
+        for body in &note_bodies {
+            models::Note::validate_body(body)?;
+        }
+
+        let mut tx = self.database.begin().await?;
+
+        let result = sqlx::query(INSERT_CONTACT_SQL)
+            .bind(&contact.first_name)
+            .bind(&contact.last_name)
+            .bind(&contact.display_name)
+            .bind(&contact.email)
+            .bind(&contact.phone_number)
+            .bind(contact.birthday)
+            .bind(contact.starred)
+            .bind(contact.is_archived)
+            .bind(contact.created_at)
+            .bind(contact.updated_at)
+            .bind(contact.last_seen_at)
+            .bind(&contact.frequency)
+            .bind(contact.last_reminder_at)
+            .execute(&mut *tx)
+            .await?;
+
+        let contact_id = result.last_insert_rowid();
+
+        for body in &note_bodies {
+            let note = models::Note::new(contact_id, body)?;
+
+            sqlx::query(INSERT_NOTE_SQL)
+                .bind(contact_id)
+                .bind(&note.body)
+                .bind(note.created_at)
+                .bind(note.updated_at)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
 
         Ok(contact_id)
     }
@@ -193,6 +255,7 @@ impl ContactRepo for Repo<SqlitePool> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::db::NoteRepo;
     use crate::test_helpers::setup_in_memory_db;
     use mockall::predicate::*;
 
@@ -221,6 +284,109 @@ mod tests {
             .expect("Saved contact");
 
         assert_eq!(result, 1);
+    }
+
+    #[tokio::test]
+    async fn should_save_contact_with_notes() -> anyhow::Result<()> {
+        let pool = setup_in_memory_db().await;
+
+        let data_repo = Repo::new(pool);
+
+        let test_contact = models::Contact::builder()
+            .first_name("Ada")
+            .last_name("Lovelace")
+            .build()
+            .expect("Test contact");
+
+        let bodies = vec!["First note".to_string(), "Second note".to_string()];
+
+        let contact_id = data_repo
+            .save_contact_with_notes(test_contact, bodies)
+            .await?;
+
+        let notes = data_repo.get_notes_for_contact(contact_id).await?;
+
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].body, "First note");
+        assert_eq!(notes[1].body, "Second note");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_reject_note_bodies_before_saving_anything() -> anyhow::Result<()> {
+        let pool = setup_in_memory_db().await;
+
+        let data_repo = Repo::new(pool);
+
+        let test_contact = models::Contact::builder()
+            .first_name("Ada")
+            .build()
+            .expect("Test contact");
+
+        let bodies = vec!["Valid note".to_string(), "   ".to_string()];
+
+        let result = data_repo
+            .save_contact_with_notes(test_contact, bodies)
+            .await;
+
+        let err = result.expect_err("Expected invalid body to be rejected");
+        assert!(err.to_string().contains("empty"));
+
+        let contacts = data_repo.get_all_contacts().await?;
+        assert!(
+            contacts.is_empty(),
+            "no contact should be written when a note body is invalid"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_rollback_contact_when_a_note_insert_fails() -> anyhow::Result<()> {
+        let pool = setup_in_memory_db().await;
+
+        // Inject a fault: any notes insert whose body is the marker aborts.
+        sqlx::query(
+            "CREATE TRIGGER fail_on_marker
+             BEFORE INSERT ON notes
+             WHEN NEW.body = 'FAIL'
+             BEGIN
+                 SELECT RAISE(ABORT, 'injected failure');
+             END;",
+        )
+        .execute(&pool)
+        .await?;
+
+        let data_repo = Repo::new(pool);
+
+        let test_contact = models::Contact::builder()
+            .first_name("Ada")
+            .build()
+            .expect("Test contact");
+
+        let bodies = vec!["First note".to_string(), "FAIL".to_string()];
+
+        let result = data_repo
+            .save_contact_with_notes(test_contact, bodies)
+            .await;
+
+        let err = result.expect_err("Expected the injected failure to abort the save");
+        assert!(err.to_string().contains("injected failure"));
+
+        let contacts = data_repo.get_all_contacts().await?;
+        assert!(
+            contacts.is_empty(),
+            "contact insert must roll back when a note insert fails"
+        );
+
+        let notes = data_repo.get_all_notes().await?;
+        assert!(
+            notes.is_empty(),
+            "the successful note insert must roll back with the transaction"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
