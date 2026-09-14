@@ -118,6 +118,18 @@ Or later, with `add-note`:
 cargo run add-note 1 "Follow up about Rust"
 ```
 
+If you leave off the note text, `add-note` and `edit-note` open your editor
+(`$VISUAL`, falling back to `$EDITOR`) — handy for longer notes. `edit-note`
+starts with the note's current text loaded:
+
+```bash
+cargo run add-note 1
+cargo run edit-note 2
+```
+
+Save and close the editor to store the note; abort the editor (non-zero
+exit) to discard it.
+
 Notes are shown in full with `get`:
 
 ```bash

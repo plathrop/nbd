@@ -734,4 +734,129 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn should_compose_note_in_editor_when_text_is_omitted() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.env("VISUAL", "cp tests/fixtures/editor_note.txt")
+            .arg("add-note")
+            .arg("1");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Successfully saved note 1"));
+
+        let notes = data_repo.get_notes_for_contact(1).await?;
+
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].body, "Composed in an editor\nwith a second line");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_edit_note_in_editor_prefilled_with_current_text() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.arg("add-note").arg("1").arg("Original body");
+        cmd.assert().success();
+
+        let captured_path = std::path::PathBuf::from("tests/captured_editor_body.txt");
+
+        let mut cmd = create_command();
+        cmd.env("VISUAL", "sh tests/fixtures/capture_editor.sh")
+            .arg("edit-note")
+            .arg("1");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Note updated"));
+
+        let captured = std::fs::read_to_string(&captured_path)?;
+        assert_eq!(captured, "Original body");
+
+        std::fs::remove_file(&captured_path)?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_fail_when_editor_exits_nonzero() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.env("VISUAL", "false").arg("add-note").arg("1");
+
+        cmd.assert()
+            .failure()
+            .stderr(predicates::str::contains("Editor exited with status"));
+
+        let notes = data_repo.get_notes_for_contact(1).await?;
+        assert!(
+            notes.is_empty(),
+            "nothing should be saved when the editor aborts"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_fail_when_editor_leaves_note_empty() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        // `true` exits 0 but leaves the editor buffer untouched (empty)
+        let mut cmd = create_command();
+        cmd.env("VISUAL", "true").arg("add-note").arg("1");
+
+        cmd.assert()
+            .failure()
+            .stderr(predicates::str::contains("Note cannot be empty"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_fail_when_no_editor_is_set() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.env_remove("VISUAL")
+            .env_remove("EDITOR")
+            .arg("add-note")
+            .arg("1");
+
+        cmd.assert().failure().stderr(predicates::str::contains(
+            "neither $VISUAL nor $EDITOR is set",
+        ));
+
+        Ok(())
+    }
 }
