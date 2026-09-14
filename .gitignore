@@ -8,6 +8,6 @@ data/*
 CLAUDE.md
 .claude
 
-
+AGENTS.local.md
 
 # Commit .sqlx/ files to enable builds without database connection
