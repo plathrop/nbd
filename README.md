@@ -150,7 +150,8 @@ cargo run edit-note 2 "Updated text"
 cargo run delete-note 3
 ```
 
-Notes are limited to 10,000 characters and cannot be empty. Deleting a
+Notes are limited to 10,000 characters and cannot be empty; leading and
+trailing whitespace is trimmed when a note is stored. Deleting a
 contact deletes its notes as well.
 
 ## Cleanup

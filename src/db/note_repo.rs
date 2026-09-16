@@ -4,6 +4,9 @@ use sqlx::SqlitePool;
 
 use super::connection::Repo;
 
+/// Persistence seam for notes. This trait exists primarily as a mockall
+/// seam for tests; it is not a stability-guaranteed API and may gain
+/// methods in any release.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait NoteRepo {
@@ -46,6 +49,8 @@ impl NoteRepo for Repo<SqlitePool> {
 
     async fn update_note(&self, note_id: i64, body: &str) -> anyhow::Result<()> {
         use chrono::Utc;
+
+        let body = body.trim();
 
         models::Note::validate_body(body)?;
 
@@ -279,6 +284,27 @@ mod tests {
         assert_eq!(
             notes.first().expect("Note should exist").body,
             "Original body"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_trim_outer_whitespace_when_updating_note() -> anyhow::Result<()> {
+        let pool = setup_in_memory_db().await;
+        let data_repo = Repo::new(pool);
+
+        let contact_id = create_contact(&data_repo).await;
+
+        let note = models::Note::new(contact_id, "Original body").expect("Valid note");
+        let note_id = data_repo.save_note(note).await?;
+
+        data_repo.update_note(note_id, "  Updated body  \n").await?;
+
+        let notes = data_repo.get_notes_for_contact(contact_id).await?;
+        assert_eq!(
+            notes.first().expect("Note should exist").body,
+            "Updated body"
         );
 
         Ok(())

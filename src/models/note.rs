@@ -55,13 +55,18 @@ impl Note {
 
     /// Builds a new, unsaved note for the given contact.
     ///
-    /// The `id` is a placeholder; the repository assigns the real ID on
-    /// save. The timestamps are set here and persisted as-is.
+    /// The body is trimmed of leading and trailing whitespace before
+    /// validation and storage. The `id` is a placeholder; the repository
+    /// assigns the real ID on save. The timestamps are set here and
+    /// persisted as-is.
     ///
     /// # Errors
     ///
-    /// This errors if the body fails [`Note::validate_body`].
+    /// This errors if the body fails [`Note::validate_body`] after
+    /// trimming.
     pub fn new(contact_id: i64, body: &str) -> anyhow::Result<Self> {
+        let body = body.trim();
+
         Self::validate_body(body)?;
 
         let now = Utc::now();
@@ -135,6 +140,13 @@ mod tests {
         let result = Note::new(1, &body);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_trim_outer_whitespace_from_note_body() {
+        let note = Note::new(1, "  Met at PyCon  \n").expect("Valid note");
+
+        assert_eq!(note.body, "Met at PyCon");
     }
 
     #[test]

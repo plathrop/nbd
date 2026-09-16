@@ -50,6 +50,10 @@ impl Actions {
         let body = if let Some(body) = &command.note {
             body.clone()
         } else {
+            // Check the contact exists before opening the editor, so a
+            // bad ID fails fast instead of after the note is composed
+            self.data_repo.get_contact_by_id(command.contact_id).await?;
+
             eprintln!("Opening your editor to compose the note...");
             utils::edit_text(".txt", "")?
         };

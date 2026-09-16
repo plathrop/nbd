@@ -14,6 +14,9 @@ const INSERT_CONTACT_SQL: &str = "INSERT INTO contacts
 const INSERT_NOTE_SQL: &str =
     "INSERT INTO notes (contact_id, body, created_at, updated_at) VALUES (?, ?, ?, ?)";
 
+/// Persistence seam for contacts. This trait exists primarily as a
+/// mockall seam for tests; it is not a stability-guaranteed API and may
+/// gain methods in any release.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait ContactRepo {
@@ -166,13 +169,17 @@ impl ContactRepo for Repo<SqlitePool> {
     async fn get_contact_by_id(&self, id: i64) -> anyhow::Result<models::IndexedContact> {
         let query_get_by_id = "SELECT * FROM contacts WHERE id=$1";
 
-        let contact: models::IndexedContact =
-            sqlx::query_as::<_, models::IndexedContact>(query_get_by_id)
-                .bind(id)
-                .fetch_one(&*self.database)
-                .await?;
-
-        Ok(contact)
+        match sqlx::query_as::<_, models::IndexedContact>(query_get_by_id)
+            .bind(id)
+            .fetch_one(&*self.database)
+            .await
+        {
+            Ok(contact) => Ok(contact),
+            Err(sqlx::Error::RowNotFound) => {
+                anyhow::bail!("That Contact ID does not exist")
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     async fn delete_contact_by_id(&self, id: i64) -> anyhow::Result<i64> {
@@ -713,6 +720,17 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_return_error_when_getting_nonexistent_contact_by_id() {
+        let pool = setup_in_memory_db().await;
+        let data_repo = Repo::new(pool);
+
+        let result = data_repo.get_contact_by_id(999).await;
+
+        let err = result.expect_err("Expected get to fail");
+        assert!(err.to_string().contains("That Contact ID does not exist"));
     }
 
     #[tokio::test]

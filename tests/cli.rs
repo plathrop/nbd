@@ -774,10 +774,11 @@ mod tests {
         cmd.arg("add-note").arg("1").arg("Original body");
         cmd.assert().success();
 
-        let captured_path = std::path::PathBuf::from("tests/captured_editor_body.txt");
+        let captured_path = std::env::temp_dir().join("nbd_editor_prefill_test.txt");
 
         let mut cmd = create_command();
         cmd.env("VISUAL", "sh tests/fixtures/capture_editor.sh")
+            .env("NBD_CAPTURE_PATH", &captured_path)
             .arg("edit-note")
             .arg("1");
 
@@ -789,6 +790,49 @@ mod tests {
         assert_eq!(captured, "Original body");
 
         std::fs::remove_file(&captured_path)?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_fall_back_to_editor_when_visual_is_unset() -> Result<()> {
+        clean_database().await?;
+
+        let data_repo = create_repo().await?;
+        data_repo
+            .save_contact(create_lewis_carroll_contact()?)
+            .await?;
+
+        let mut cmd = create_command();
+        cmd.env_remove("VISUAL")
+            .env("EDITOR", "cp tests/fixtures/editor_note.txt")
+            .arg("add-note")
+            .arg("1");
+
+        cmd.assert()
+            .success()
+            .stdout(predicates::str::contains("Successfully saved note 1"));
+
+        let notes = data_repo.get_notes_for_contact(1).await?;
+
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].body, "Composed in an editor\nwith a second line");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn should_fail_before_opening_editor_for_nonexistent_contact() -> Result<()> {
+        clean_database().await?;
+
+        let mut cmd = create_command();
+        cmd.env("VISUAL", "cp tests/fixtures/editor_note.txt")
+            .arg("add-note")
+            .arg("999");
+
+        cmd.assert()
+            .failure()
+            .stderr(predicates::str::contains("That Contact ID does not exist"));
 
         Ok(())
     }

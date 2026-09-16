@@ -2,10 +2,17 @@ use std::{env, fs, io::Write, path::Path, process::Command};
 use tempfile::Builder;
 
 /// Opens the user's editor (`$VISUAL`, then `$EDITOR`) on a temp file
-/// preloaded with `initial`, and returns the edited text (trimmed).
+/// preloaded with `initial`, and returns the edited text verbatim —
+/// trimming is the caller's business.
 ///
-/// The git-style invocation `sh -c '$EDITOR "$@"' $EDITOR <file>` is used so
-/// an `EDITOR` with arguments (e.g. `code --wait`) works.
+/// The editor is launched git-style via the shell:
+/// `sh -c '$EDITOR "$@"' $EDITOR <file>` — the editor lands in `$0` and
+/// the temp path in `$1` — so an `EDITOR` containing arguments (e.g.
+/// `code --wait`) works, and paths with spaces pass through intact. The
+/// editor value comes from the user's own environment and is executed as
+/// given; that is what an editor setting means.
+///
+/// This requires a POSIX `sh`; it does not work on Windows.
 ///
 /// # Errors
 ///
@@ -37,7 +44,7 @@ pub fn edit_text(extension: &str, initial: &str) -> anyhow::Result<String> {
 
     let edited = read_text(&path)?;
 
-    Ok(edited.trim().to_owned())
+    Ok(edited)
 }
 
 fn read_text(path: &Path) -> anyhow::Result<String> {
